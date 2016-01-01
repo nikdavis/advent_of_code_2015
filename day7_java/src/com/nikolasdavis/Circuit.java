@@ -21,7 +21,7 @@ public class Circuit {
         public int value = -1;              // -1 symbolizes not set; all values will be 0 or greater
 
         public Gate(String gateText) {
-            if(Constants.DEBUG == true) {
+            if(Constants.DEBUG) {
                 System.out.println(gateText);
             }
             String[] tmp = gateText.split(" -> ");
@@ -43,14 +43,14 @@ public class Circuit {
                 action = command[1];
                 params = new String[] {command[0], command[2]};
             }
-            if(Constants.DEBUG == true) {
+            if(Constants.DEBUG) {
                 System.out.println("Name: " + name + ", action: " + action + " with " + params.length + " param(s).");
             }
         }
     }
 
     private Map<String, Gate> gates = new HashMap<String, Gate>();
-    private Map<String, List<String>> gateRevDeps = new HashMap<String, List<String>>();
+    private Map<String, List<String>> gatesRevDeps = new HashMap<String, List<String>>();
 
     public Circuit(String fileName) {
         try (BufferedReader br = new BufferedReader(new FileReader(fileName))) {
@@ -59,13 +59,13 @@ public class Circuit {
                 Gate gate = new Gate(line);
                 gates.put(gate.name, gate);
                 for (String param : gate.params) {
-                    boolean isNum = param.matches("^\\d+$");
-                    if (isNum  == false) {
-                        if (gateRevDeps.get(gate.name) == null) {
-                            gateRevDeps.put(gate.name, new ArrayList<String>());
+                    // Param is not a literal, then store this gate as a upstream dep
+                    if (param.matches("^\\d+$") != true) {
+                        if (gatesRevDeps.get(param) == null) {
+                            gatesRevDeps.put(param, new ArrayList<String>());
                         }
                         // If it's not a literal add it's back dependency
-                        gateRevDeps.get(gate.name).add(param);
+                        gatesRevDeps.get(param).add(gate.name);
                     }
                 }
             }
@@ -74,22 +74,40 @@ public class Circuit {
         } catch (IOException ex) {
             System.out.println("Encountered IO error.");
         }
-        System.out.println(gateRevDeps.get("hr"));
-        // Resolve values
-        for (String key : gates.keySet()) {
-            Gate gate = gates.get(key);
-            int value = resolveValues(gate);
-            if(Constants.DEBUG == true) {
-                System.out.println(key + ": " + value);
+        if(Constants.DEBUG) {
+            for (Map.Entry entry : gatesRevDeps.entrySet()) {
+                System.out.println("deps of " + entry.getKey() + ": " + entry.getValue());
             }
         }
+        resolveValues();
     }
 
     public int get(String gateKey){
         return gates.get(gateKey).value;
     }
 
-    private int resolveValues(Gate gate) {
+    // allows setting to an int value
+    public void set(String gateKey, int value) {
+        // change value, destroy deps, and bust upstream cached values
+        Gate gate = gates.get(gateKey);
+        gate.value = value;
+        gate.params = new String[] {String.valueOf(value)};
+        bustUpstreamDeps(gate, new ArrayList<String>());
+        resolveValues();
+    }
+
+    private void resolveValues() {
+        // Resolve values
+        for (String key : gates.keySet()) {
+            Gate gate = gates.get(key);
+            int value = resolveValuesRec(gate);
+            if(Constants.DEBUG) {
+                System.out.println(key + ": " + value);
+            }
+        }
+    }
+
+    private int resolveValuesRec(Gate gate) {
         if (gate.value < 0) {
             int[] deps = new int[gate.params.length];
             for (int i = 0; i < gate.params.length; i++) {
@@ -100,7 +118,7 @@ public class Circuit {
                     if (dep.value >= 0) {
                         deps[i] = dep.value;
                     } else {
-                        deps[i] = resolveValues(dep);
+                        deps[i] = resolveValuesRec(dep);
                     }
                 }
             }
@@ -123,7 +141,17 @@ public class Circuit {
         return gate.value;
     }
 
-    private void bustDeps() {
-
+    private void bustUpstreamDeps(Gate gate, List<String> uniqueDepList) {
+        List<String> depList = gatesRevDeps.get(gate.name);
+        if(depList != null) {
+            for (String depName : depList) {
+                if (!uniqueDepList.contains(depName)) {
+                    Gate dep = gates.get(depName);
+                    dep.value = -1;
+                    uniqueDepList.add(depName);
+                    bustUpstreamDeps(dep, uniqueDepList);
+                }
+            }
+        }
     }
 }
